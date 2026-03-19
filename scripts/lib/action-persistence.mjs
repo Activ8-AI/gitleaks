@@ -1,5 +1,5 @@
 // managed-by: activ8-ai-context-pack | pack-version: 1.1.0
-// source-sha: bfdd4b8
+// source-sha: bff7ed8
 import {
   appendFileSync,
   existsSync,
@@ -19,7 +19,7 @@ function nowCtParts() {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hourCycle: "h23",
+    hour12: false,
   }).formatToParts(new Date());
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
