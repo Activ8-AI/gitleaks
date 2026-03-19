@@ -10,8 +10,7 @@ import { safePersistActionReceipt } from "./lib/action-persistence.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const OUTPUT_DIR = join(REPO_ROOT, "artifacts", "build-operationalization");
-const PROMPT_LIBRARY_DATABASE_ID =
-  process.env.PROMPT_LIBRARY_DATABASE_ID || "1ed5dd73-706e-8060-9175-cddeecb007a8";
+const PROMPT_LIBRARY_DATABASE_ID = process.env.PROMPT_LIBRARY_DATABASE_ID || null;
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
@@ -27,7 +26,7 @@ function nowCtParts() {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hour12: false,
+    hourCycle: "h23",
   }).formatToParts(new Date());
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
@@ -57,7 +56,20 @@ function runScript(relativePath, extraArgs = []) {
   };
 }
 
+function dryRunStep(name, detail) {
+  return {
+    name,
+    ok: true,
+    skipped: true,
+    detail,
+  };
+}
+
 async function verifyPromptRow() {
+  if (dryRun) {
+    return dryRunStep("prompt-library-verify", "dry-run: verification skipped");
+  }
+
   if (!withSync || !process.env.NOTION_API_TOKEN) {
     return {
       name: "prompt-library-verify",
@@ -66,6 +78,15 @@ async function verifyPromptRow() {
       detail: !withSync
         ? "verification skipped"
         : "NOTION_API_TOKEN missing for prompt library verification",
+    };
+  }
+
+  if (!PROMPT_LIBRARY_DATABASE_ID) {
+    return {
+      name: "prompt-library-verify",
+      ok: false,
+      skipped: false,
+      detail: "PROMPT_LIBRARY_DATABASE_ID missing for prompt library verification",
     };
   }
 
@@ -109,18 +130,22 @@ async function verifyPromptRow() {
 }
 
 async function main() {
-  const steps = [
-    runScript("scripts/build-operationalization-check.mjs"),
-    runScript("scripts/action-persistence-self-check.mjs"),
-    await verifyPromptRow(),
-  ];
+  const steps = dryRun
+    ? [
+        dryRunStep("build-operationalization-check", "dry-run: subprocess skipped"),
+        dryRunStep("action-persistence-self-check", "dry-run: subprocess skipped"),
+        await verifyPromptRow(),
+      ]
+    : [
+        runScript("scripts/build-operationalization-check.mjs"),
+        runScript("scripts/action-persistence-self-check.mjs"),
+        await verifyPromptRow(),
+      ];
 
   const blockers = steps.filter((step) => !step.ok && !step.skipped);
   const status = blockers.length === 0 ? "GREEN" : "RED";
   const finishedAtMs = Date.now();
   const ts = timestampCt();
-
-  mkdirSync(OUTPUT_DIR, { recursive: true });
   const payload = {
     schema_version: "managed_repo_operationalize_buildwide_v1",
     status,
@@ -133,35 +158,38 @@ async function main() {
     steps,
   };
 
-  const jsonPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.json`);
-  const mdPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.md`);
-  writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
-  writeFileSync(
-    mdPath,
-    `# Repo Operationalization\n\n- Status: ${status}\n- Generated: ${payload.generated_at_ct}\n- Steps: ${steps.length}\n`,
-    "utf-8"
-  );
+  if (!dryRun) {
+    mkdirSync(OUTPUT_DIR, { recursive: true });
+    const jsonPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.json`);
+    const mdPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.md`);
+    writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+    writeFileSync(
+      mdPath,
+      `# Repo Operationalization\n\n- Status: ${status}\n- Generated: ${payload.generated_at_ct}\n- Steps: ${steps.length}\n`,
+      "utf-8"
+    );
 
-  safePersistActionReceipt({
-    repoRoot: REPO_ROOT,
-    actionId: "managed-repo-operationalize-buildwide",
-    actionClass: "operationalization",
-    entrypoint: "scripts/operationalize-buildwide.mjs",
-    status: status === "GREEN" ? "success" : "failure",
-    startedAtMs,
-    finishedAtMs,
-    evidence: {
-      status,
-      steps: steps.map((step) => ({ name: step.name || step.command, ok: step.ok, skipped: step.skipped || false })),
-    },
-    artifacts: {
-      json: jsonPath,
-      markdown: mdPath,
-    },
-  });
+    safePersistActionReceipt({
+      repoRoot: REPO_ROOT,
+      actionId: "managed-repo-operationalize-buildwide",
+      actionClass: "operationalization",
+      entrypoint: "scripts/operationalize-buildwide.mjs",
+      status: status === "GREEN" ? "success" : "failure",
+      startedAtMs,
+      finishedAtMs,
+      evidence: {
+        status,
+        steps: steps.map((step) => ({ name: step.name || step.command, ok: step.ok, skipped: step.skipped || false })),
+      },
+      artifacts: {
+        json: jsonPath,
+        markdown: mdPath,
+      },
+    });
+  }
 
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  if (status !== "GREEN") {
+  if (!dryRun && status !== "GREEN") {
     process.exit(1);
   }
 }

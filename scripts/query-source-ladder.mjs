@@ -13,6 +13,22 @@ const DEFAULT_LIMIT = 5;
 const DEFAULT_TTL_MINUTES = 60;
 const MAX_BYTES = 512 * 1024;
 const TEXT_EXTENSIONS = new Set([".md", ".mdc", ".txt", ".json", ".yaml", ".yml", ".csv", ".html"]);
+function parsePathListEnv(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.map((entry) => String(entry || "").trim()).filter(Boolean);
+    }
+  } catch {
+    // Fall back to comma-delimited lists for simple shell configuration.
+  }
+  return String(value)
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 const ANCHOR_FILES = [
   "docs/SOURCES-OF-TRUTH.md",
   "docs/AUDIENCE-SURFACE-CONTRACT.md",
@@ -30,8 +46,9 @@ const ANCHOR_FILES = [
   "memory/key-lessons.md",
 ];
 const REPO_MIRROR_DIRS = ["docs", ".github", "artifacts/prompt-library", "memory", "scripts"];
-const DOWNLOAD_FILES = [path.join(HOME, "Downloads", "2250316 NOTION WORKSPACE MASTER SITEMAP v1.7.md")];
-const DOWNLOAD_DIRS = [path.join(HOME, "Downloads", "Private & Shared 2")];
+const DOWNLOAD_FILES = parsePathListEnv(process.env.SOURCE_QUERY_LADDER_DOWNLOAD_FILES);
+const configuredDownloadDirs = parsePathListEnv(process.env.SOURCE_QUERY_LADDER_DOWNLOAD_DIRS);
+const DOWNLOAD_DIRS = configuredDownloadDirs.length ? configuredDownloadDirs : [path.join(HOME, "Downloads")];
 const RECEIPT_ROOT = path.join(REPO_ROOT, "artifacts", "source-query-ladder");
 const RECEIPTS_DIR = path.join(RECEIPT_ROOT, "receipts");
 const CACHE_DIR = path.join(RECEIPT_ROOT, "cache");
