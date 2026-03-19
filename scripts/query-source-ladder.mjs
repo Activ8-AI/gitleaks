@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // managed-by: activ8-ai-context-pack | pack-version: 1.2.0
-// source-sha: bfdd4b8
+// source-sha: bff7ed8
 
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -14,22 +14,6 @@ const DEFAULT_LIMIT = 5;
 const DEFAULT_TTL_MINUTES = 60;
 const MAX_BYTES = 512 * 1024;
 const TEXT_EXTENSIONS = new Set([".md", ".mdc", ".txt", ".json", ".yaml", ".yml", ".csv", ".html"]);
-function parsePathListEnv(value) {
-  if (!value) return [];
-  try {
-    const parsed = JSON.parse(value);
-    if (Array.isArray(parsed)) {
-      return parsed.map((entry) => String(entry || "").trim()).filter(Boolean);
-    }
-  } catch {
-    // Fall back to comma-delimited lists for simple shell configuration.
-  }
-  return String(value)
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 const ANCHOR_FILES = [
   "docs/SOURCES-OF-TRUTH.md",
   "docs/AUDIENCE-SURFACE-CONTRACT.md",
@@ -47,14 +31,13 @@ const ANCHOR_FILES = [
   "memory/key-lessons.md",
 ];
 const REPO_MIRROR_DIRS = ["docs", ".github", "artifacts/prompt-library", "memory", "scripts"];
-const DOWNLOAD_FILES = parsePathListEnv(process.env.SOURCE_QUERY_LADDER_DOWNLOAD_FILES);
-const configuredDownloadDirs = parsePathListEnv(process.env.SOURCE_QUERY_LADDER_DOWNLOAD_DIRS);
-const DOWNLOAD_DIRS = configuredDownloadDirs.length ? configuredDownloadDirs : [path.join(HOME, "Downloads")];
+const DOWNLOAD_FILES = [];
+const DOWNLOAD_DIRS = [];
 const RECEIPT_ROOT = path.join(REPO_ROOT, "artifacts", "source-query-ladder");
 const RECEIPTS_DIR = path.join(RECEIPT_ROOT, "receipts");
 const CACHE_DIR = path.join(RECEIPT_ROOT, "cache");
 const LEDGER_PATH = path.join(RECEIPT_ROOT, "query-receipts.jsonl");
-const LATEST_PATH = path.join(RECEIPT_ROOT, "latest.json");
+const LATEST_DIR = path.join(RECEIPT_ROOT, "latest");
 
 function usage() {
   console.error(
@@ -218,6 +201,7 @@ function toDisplayPath(targetPath) {
 async function ensureReceiptDirs() {
   await fs.mkdir(RECEIPTS_DIR, { recursive: true });
   await fs.mkdir(CACHE_DIR, { recursive: true });
+  await fs.mkdir(LATEST_DIR, { recursive: true });
 }
 
 async function loadCachedResult(cachePath, ttlMinutes) {
@@ -233,9 +217,10 @@ async function writeReceiptArtifacts(result) {
   await ensureReceiptDirs();
   const ts = nowIso().replace(/[:.]/g, "-");
   const receiptPath = path.join(RECEIPTS_DIR, `${ts}__${result.meta.cache_key}.json`);
+  const latestPath = path.join(LATEST_DIR, `${result.meta.cache_key}.json`);
   const payload = { ...result, meta: { ...result.meta, latest_receipt_path: toDisplayPath(receiptPath) } };
   await fs.writeFile(receiptPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  await fs.writeFile(LATEST_PATH, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await fs.writeFile(latestPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   await fs.writeFile(path.join(CACHE_DIR, `${result.meta.cache_key}.json`), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
   await fs.appendFile(
     LEDGER_PATH,

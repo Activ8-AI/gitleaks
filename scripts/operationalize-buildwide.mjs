@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // managed-by: activ8-ai-context-pack | pack-version: 1.1.0
-// source-sha: bfdd4b8
+// source-sha: bff7ed8
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -11,7 +11,10 @@ import { safePersistActionReceipt } from "./lib/action-persistence.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..");
 const OUTPUT_DIR = join(REPO_ROOT, "artifacts", "build-operationalization");
-const PROMPT_LIBRARY_DATABASE_ID = process.env.PROMPT_LIBRARY_DATABASE_ID || null;
+const PROMPT_LIBRARY_DATABASE_ID =
+  process.env.NOTION_PROMPT_LIBRARY_DATABASE_ID
+  || process.env.PROMPT_LIBRARY_DATABASE_ID
+  || "1ed5dd73-706e-8060-9175-cddeecb007a8";
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
@@ -27,7 +30,7 @@ function nowCtParts() {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-    hourCycle: "h23",
+    hour12: false,
   }).formatToParts(new Date());
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
@@ -57,20 +60,7 @@ function runScript(relativePath, extraArgs = []) {
   };
 }
 
-function dryRunStep(name, detail) {
-  return {
-    name,
-    ok: true,
-    skipped: true,
-    detail,
-  };
-}
-
 async function verifyPromptRow() {
-  if (dryRun) {
-    return dryRunStep("prompt-library-verify", "dry-run: verification skipped");
-  }
-
   if (!withSync || !process.env.NOTION_API_TOKEN) {
     return {
       name: "prompt-library-verify",
@@ -79,15 +69,6 @@ async function verifyPromptRow() {
       detail: !withSync
         ? "verification skipped"
         : "NOTION_API_TOKEN missing for prompt library verification",
-    };
-  }
-
-  if (!PROMPT_LIBRARY_DATABASE_ID) {
-    return {
-      name: "prompt-library-verify",
-      ok: false,
-      skipped: false,
-      detail: "PROMPT_LIBRARY_DATABASE_ID missing for prompt library verification",
     };
   }
 
@@ -131,22 +112,43 @@ async function verifyPromptRow() {
 }
 
 async function main() {
-  const steps = dryRun
-    ? [
-        dryRunStep("build-operationalization-check", "dry-run: subprocess skipped"),
-        dryRunStep("action-persistence-self-check", "dry-run: subprocess skipped"),
-        await verifyPromptRow(),
-      ]
-    : [
-        runScript("scripts/build-operationalization-check.mjs"),
-        runScript("scripts/action-persistence-self-check.mjs"),
-        await verifyPromptRow(),
-      ];
+  const steps = [
+    runScript("scripts/build-operationalization-check.mjs"),
+    runScript("scripts/action-persistence-self-check.mjs"),
+      runScript("scripts/lint-alias-drift.mjs"),
+    await verifyPromptRow(),
+  ];
+
+  if (withSync && !dryRun) {
+    steps.push(runScript("scripts/sync-context-pack.mjs", ["--target", ".", "--strict"]));
+    steps.push(
+      runScript("scripts/sync-agent-instructions.mjs", [
+        "--fix",
+        "--push-notion",
+        "--emit-notion",
+      ])
+    );
+  } else {
+    steps.push({
+      name: "context-pack-self-sync",
+      ok: true,
+      skipped: true,
+      detail: dryRun ? "auto-update skipped in dry-run mode" : "auto-update requires --with-sync",
+    });
+    steps.push({
+      name: "agent-instruction-auto-sync",
+      ok: true,
+      skipped: true,
+      detail: dryRun ? "auto-update skipped in dry-run mode" : "auto-update requires --with-sync",
+    });
+  }
 
   const blockers = steps.filter((step) => !step.ok && !step.skipped);
   const status = blockers.length === 0 ? "GREEN" : "RED";
   const finishedAtMs = Date.now();
   const ts = timestampCt();
+
+  mkdirSync(OUTPUT_DIR, { recursive: true });
   const payload = {
     schema_version: "managed_repo_operationalize_buildwide_v1",
     status,
@@ -159,38 +161,35 @@ async function main() {
     steps,
   };
 
-  if (!dryRun) {
-    mkdirSync(OUTPUT_DIR, { recursive: true });
-    const jsonPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.json`);
-    const mdPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.md`);
-    writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
-    writeFileSync(
-      mdPath,
-      `# Repo Operationalization\n\n- Status: ${status}\n- Generated: ${payload.generated_at_ct}\n- Steps: ${steps.length}\n`,
-      "utf-8"
-    );
+  const jsonPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.json`);
+  const mdPath = join(OUTPUT_DIR, `${ts}__repo_operationalization.md`);
+  writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+  writeFileSync(
+    mdPath,
+    `# Repo Operationalization\n\n- Status: ${status}\n- Generated: ${payload.generated_at_ct}\n- Steps: ${steps.length}\n`,
+    "utf-8"
+  );
 
-    safePersistActionReceipt({
-      repoRoot: REPO_ROOT,
-      actionId: "managed-repo-operationalize-buildwide",
-      actionClass: "operationalization",
-      entrypoint: "scripts/operationalize-buildwide.mjs",
-      status: status === "GREEN" ? "success" : "failure",
-      startedAtMs,
-      finishedAtMs,
-      evidence: {
-        status,
-        steps: steps.map((step) => ({ name: step.name || step.command, ok: step.ok, skipped: step.skipped || false })),
-      },
-      artifacts: {
-        json: jsonPath,
-        markdown: mdPath,
-      },
-    });
-  }
+  safePersistActionReceipt({
+    repoRoot: REPO_ROOT,
+    actionId: "managed-repo-operationalize-buildwide",
+    actionClass: "operationalization",
+    entrypoint: "scripts/operationalize-buildwide.mjs",
+    status: status === "GREEN" ? "success" : "failure",
+    startedAtMs,
+    finishedAtMs,
+    evidence: {
+      status,
+      steps: steps.map((step) => ({ name: step.name || step.command, ok: step.ok, skipped: step.skipped || false })),
+    },
+    artifacts: {
+      json: jsonPath,
+      markdown: mdPath,
+    },
+  });
 
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
-  if (!dryRun && status !== "GREEN") {
+  if (status !== "GREEN") {
     process.exit(1);
   }
 }
