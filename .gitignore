@@ -22,3 +22,7 @@ testdata/expected/report/*.got.*
 *.out
 
 dist/
+artifacts/prompt-library/operationalization/
+artifacts/action-persistence/
+artifacts/build-operationalization/
+artifacts/source-query-ladder/
